@@ -8,9 +8,8 @@ class Settings(BaseSettings):
     port: int = 8002
     database_url: str = "postgresql+psycopg://atlas:atlas@localhost:5432/time_db"
     amqp_url: str = "amqp://atlas:atlas@localhost:5672/"
-    jwt_secret: str = "atlas-dev-secret"
+    jwt_secret: str = "atlas-local-development-secret-32"
     jwt_ttl_hours: int = 8
 
 
 settings = Settings()
-
