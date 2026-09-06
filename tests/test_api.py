@@ -9,7 +9,13 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.consumers import handle_timesheet_approved, handle_timesheet_rejected
+from app.consumers import (
+    handle_employee_created,
+    handle_employee_deactivated,
+    handle_employee_updated,
+    handle_timesheet_approved,
+    handle_timesheet_rejected,
+)
 from app.core.config import Settings, settings
 from app.models import EmployeeRead, EmployeeStatus, TimeEntry, Timesheet
 from app.seed import DEMO_EMPLOYEES, seed_demo_data
@@ -331,7 +337,7 @@ def test_create_and_submit_reject_overlapping_periods(
     assert submit_overlap.json()["error"]["code"] == "TIME_TIMESHEET_OVERLAP"
 
 
-def test_jwt_claims_are_authoritative_until_employee_consumers_exist(
+def test_jwt_claims_are_authoritative_even_without_a_synced_projection(
     client: TestClient, db: Session
 ) -> None:
     employee = db.get(EmployeeRead, uuid.UUID(ADA_ID))
@@ -517,6 +523,7 @@ def test_openapi_contains_time_surface(client: TestClient) -> None:
         "/api/v1/time/timesheets/{timesheet_id}",
         "/api/v1/time/timesheets/{timesheet_id}/submit",
         "/api/v1/time/pto/balance",
+        "/api/v1/time/profiles/{employee_id}",
     } <= paths
     assert specification["paths"]["/api/v1/time/healthz"]["get"]["operationId"] == "timeHealth"
     assert (
@@ -542,6 +549,10 @@ def test_openapi_contains_time_surface(client: TestClient) -> None:
     )
     assert (
         specification["paths"]["/api/v1/time/pto/balance"]["get"]["operationId"] == "getPtoBalance"
+    )
+    assert (
+        specification["paths"]["/api/v1/time/profiles/{employee_id}"]["get"]["operationId"]
+        == "getTimeProfile"
     )
     schemas = specification["components"]["schemas"]
     assert schemas["TimesheetCreate"]["properties"]["entries"]["maxItems"] == 7
@@ -599,3 +610,148 @@ async def test_handle_timesheet_decision_is_idempotent_and_ignores_unknown_ids(
 
     # Unknown timesheet id: logged and ignored, no exception raised.
     await handle_timesheet_approved({"data": {"timesheet_id": str(uuid.uuid4())}})
+
+
+async def test_handle_employee_created_provisions_new_row(
+    consumer_db: Session,
+) -> None:
+    employee_id = "20000000-0000-4000-8000-000000000003"
+    assert consumer_db.get(EmployeeRead, uuid.UUID(employee_id)) is None
+
+    await handle_employee_created(
+        {
+            "type": "employee.created",
+            "data": {
+                "employee_id": employee_id,
+                "email": "new.hire@atlas.dev",
+                "full_name": "New Hire",
+                "cost_center": "CC-200",
+                "manager_id": GRACE_ID,
+                "home_currency": "USD",
+                "pto_entitlement_days": 20,
+                "status": "ACTIVE",
+            },
+        }
+    )
+
+    projection = consumer_db.get(EmployeeRead, uuid.UUID(employee_id))
+    assert projection is not None
+    assert projection.pto_entitlement_days == 20
+    assert projection.manager_id == uuid.UUID(GRACE_ID)
+    assert projection.status == "ACTIVE"
+
+
+async def test_handle_employee_created_is_idempotent_on_redelivery(
+    consumer_db: Session,
+) -> None:
+    employee_id = "20000000-0000-4000-8000-000000000004"
+    event = {
+        "type": "employee.created",
+        "data": {
+            "employee_id": employee_id,
+            "email": "redelivered@atlas.dev",
+            "full_name": "Redelivered Hire",
+            "cost_center": "CC-200",
+            "manager_id": None,
+            "home_currency": "USD",
+            "pto_entitlement_days": 18,
+            "status": "ACTIVE",
+        },
+    }
+    await handle_employee_created(event)
+    await handle_employee_created(event)
+
+    count = db_count_employee_read(consumer_db, employee_id)
+    assert count == 1
+
+
+def db_count_employee_read(db: Session, employee_id: str) -> int:
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(EmployeeRead)
+            .where(EmployeeRead.id == uuid.UUID(employee_id))
+        )
+        or 0
+    )
+
+
+async def test_handle_employee_updated_applies_manager_and_entitlement_changes(
+    consumer_db: Session,
+) -> None:
+    await handle_employee_updated(
+        {
+            "type": "employee.updated",
+            "data": {
+                "employee_id": ADA_ID,
+                "changed": {"manager_id": None, "pto_entitlement_days": 30},
+            },
+        }
+    )
+    consumer_db.expire_all()
+    projection = consumer_db.get(EmployeeRead, uuid.UUID(ADA_ID))
+    assert projection is not None
+    assert projection.manager_id is None
+    assert projection.pto_entitlement_days == 30
+
+
+async def test_handle_employee_updated_ignores_unknown_employee(
+    consumer_db: Session,
+) -> None:
+    # No matching row and no exception: an update for an employee this
+    # service hasn't seen yet (e.g. redelivery race) is a no-op.
+    await handle_employee_updated(
+        {
+            "type": "employee.updated",
+            "data": {"employee_id": str(uuid.uuid4()), "changed": {"pto_entitlement_days": 5}},
+        }
+    )
+
+
+async def test_handle_employee_deactivated_marks_projection_inactive(
+    consumer_db: Session,
+) -> None:
+    await handle_employee_deactivated(
+        {"type": "employee.deactivated", "data": {"employee_id": ADA_ID}}
+    )
+    consumer_db.expire_all()
+    projection = consumer_db.get(EmployeeRead, uuid.UUID(ADA_ID))
+    assert projection is not None
+    assert projection.status == "INACTIVE"
+
+    # Unknown employee id: logged and ignored, no exception raised.
+    await handle_employee_deactivated(
+        {"type": "employee.deactivated", "data": {"employee_id": str(uuid.uuid4())}}
+    )
+
+
+def test_get_time_profile_returns_provisioned_projection(client: TestClient) -> None:
+    response = client.get(
+        f"/api/v1/time/profiles/{ADA_ID}",
+        headers=bearer(token_for(roles=["HR_ADMIN"])),
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "employee_id": ADA_ID,
+        "status": "ACTIVE",
+        "manager_id": GRACE_ID,
+        "pto_entitlement_days": 22,
+    }
+
+
+def test_get_time_profile_404s_when_not_yet_provisioned(client: TestClient) -> None:
+    response = client.get(
+        f"/api/v1/time/profiles/{uuid.uuid4()}",
+        headers=bearer(token_for(roles=["HR_ADMIN"])),
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "TIME_PROFILE_NOT_FOUND"
+
+
+def test_get_time_profile_requires_hr_admin(client: TestClient) -> None:
+    response = client.get(
+        f"/api/v1/time/profiles/{ADA_ID}",
+        headers=bearer(token_for(roles=["EMPLOYEE"])),
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "TIME_FORBIDDEN"

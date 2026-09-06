@@ -108,3 +108,12 @@ class PtoBalance(BaseModel):
     taken_days: float
     pending_days: float
     balance_days: float
+
+
+class ProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: uuid.UUID
+    status: str
+    manager_id: uuid.UUID | None
+    pto_entitlement_days: int

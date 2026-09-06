@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .api.profiles import router as profiles_router
 from .api.pto import router as pto_router
 from .api.timesheets import router as timesheets_router
 from .consumers import BINDINGS
@@ -28,6 +29,7 @@ app = FastAPI(title="Atlas Time API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CorrelationIdMiddleware)
 app.include_router(timesheets_router)
 app.include_router(pto_router)
+app.include_router(profiles_router)
 
 
 def correlation_id(request: Request) -> str:
