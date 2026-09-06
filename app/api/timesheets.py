@@ -169,9 +169,7 @@ def create_timesheet(
     return timesheet
 
 
-@router.get(
-    "/{timesheet_id}", response_model=TimesheetResponse, operation_id="getTimesheet"
-)
+@router.get("/{timesheet_id}", response_model=TimesheetResponse, operation_id="getTimesheet")
 def get_timesheet(
     timesheet_id: uuid.UUID,
     claims: Claims = Depends(require("EMPLOYEE")),
@@ -180,18 +178,14 @@ def get_timesheet(
     return owned_timesheet(db, timesheet_id, employee_id_from(claims))
 
 
-@router.put(
-    "/{timesheet_id}", response_model=TimesheetResponse, operation_id="updateTimesheet"
-)
+@router.put("/{timesheet_id}", response_model=TimesheetResponse, operation_id="updateTimesheet")
 def update_timesheet(
     timesheet_id: uuid.UUID,
     body: TimesheetUpdate,
     claims: Claims = Depends(require("EMPLOYEE")),
     db: Session = Depends(get_db),
 ) -> Timesheet:
-    timesheet = owned_timesheet(
-        db, timesheet_id, employee_id_from(claims), for_update=True
-    )
+    timesheet = owned_timesheet(db, timesheet_id, employee_id_from(claims), for_update=True)
     if timesheet.status != TimesheetStatus.DRAFT:
         raise AppError(
             422,
@@ -222,9 +216,7 @@ async def submit_timesheet(
     timesheet = owned_timesheet(db, timesheet_id, employee_id, for_update=True)
     ensure_draft(timesheet)
     if not timesheet.entries:
-        raise AppError(
-            422, "TIME_TIMESHEET_EMPTY", "A timesheet must contain at least one entry."
-        )
+        raise AppError(422, "TIME_TIMESHEET_EMPTY", "A timesheet must contain at least one entry.")
     invalid_dates = [
         entry
         for entry in timesheet.entries
@@ -254,9 +246,7 @@ async def submit_timesheet(
 
     total = sum((entry.hours for entry in timesheet.entries), start=Decimal("0.00"))
     timesheet.total_hours = total
-    timesheet.overtime_hours = max(
-        Decimal("0.00"), total - settings.standard_week_hours
-    )
+    timesheet.overtime_hours = max(Decimal("0.00"), total - settings.standard_week_hours)
     timesheet.status = TimesheetStatus.PENDING_APPROVAL
     db.commit()
     db.refresh(timesheet)

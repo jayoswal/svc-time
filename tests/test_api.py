@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.consumers import handle_timesheet_approved, handle_timesheet_rejected
 from app.core.config import Settings, settings
 from app.models import EmployeeRead, EmployeeStatus, TimeEntry, Timesheet
 from app.seed import DEMO_EMPLOYEES, seed_demo_data
@@ -44,9 +45,7 @@ def test_health_and_auth_errors_use_correlation_envelope(client: TestClient) -> 
     assert health.json() == {"status": "ok", "service": "svc-time"}
     assert health.headers["X-Correlation-Id"] == correlation_id
 
-    denied = client.get(
-        "/api/v1/time/timesheets", headers={"X-Correlation-Id": correlation_id}
-    )
+    denied = client.get("/api/v1/time/timesheets", headers={"X-Correlation-Id": correlation_id})
     assert denied.status_code == 401
     assert denied.json() == {
         "error": {
@@ -63,16 +62,12 @@ def test_create_get_and_list_only_self_timesheets(client: TestClient) -> None:
     grace = token_for(GRACE_ID, ["EMPLOYEE", "MANAGER"])
     created = create_timesheet(client, ada)
 
-    fetched = client.get(
-        f"/api/v1/time/timesheets/{created['id']}", headers=bearer(ada)
-    )
+    fetched = client.get(f"/api/v1/time/timesheets/{created['id']}", headers=bearer(ada))
     assert fetched.status_code == 200
     assert fetched.json()["employee_id"] == ADA_ID
     assert fetched.json()["status"] == "DRAFT"
 
-    forbidden = client.get(
-        f"/api/v1/time/timesheets/{created['id']}", headers=bearer(grace)
-    )
+    forbidden = client.get(f"/api/v1/time/timesheets/{created['id']}", headers=bearer(grace))
     assert forbidden.status_code == 403
     assert forbidden.json()["error"]["code"] == "TIME_FORBIDDEN"
 
@@ -111,11 +106,7 @@ def test_update_replaces_entries_for_the_same_work_date(client: TestClient) -> N
     response = client.put(
         f"/api/v1/time/timesheets/{created['id']}",
         headers=bearer(token),
-        json={
-            "entries": [
-                {"work_date": "2026-09-01", "hours": 6.5, "project_code": "NEW"}
-            ]
-        },
+        json={"entries": [{"work_date": "2026-09-01", "hours": 6.5, "project_code": "NEW"}]},
     )
     assert response.status_code == 200
     assert response.json()["entries"] == [
@@ -233,9 +224,7 @@ def test_submit_rejects_invalid_entries(
 ) -> None:
     token = token_for()
     created = create_timesheet(client, token, entries=entries)
-    response = client.post(
-        f"/api/v1/time/timesheets/{created['id']}/submit", headers=bearer(token)
-    )
+    response = client.post(f"/api/v1/time/timesheets/{created['id']}/submit", headers=bearer(token))
     assert response.status_code == 422
     assert response.json()["error"]["code"] == error_code
 
@@ -249,9 +238,7 @@ def test_submit_rejects_invalid_entries(
         {"work_date": "2026-09-01", "hours": 8.001, "project_code": "ATLAS"},
     ],
 )
-def test_entry_schema_rejects_invalid_values(
-    client: TestClient, entry: dict[str, object]
-) -> None:
+def test_entry_schema_rejects_invalid_values(client: TestClient, entry: dict[str, object]) -> None:
     response = client.post(
         "/api/v1/time/timesheets",
         headers=bearer(token_for()),
@@ -272,9 +259,7 @@ def test_entry_hours_rejects_json_strings(client: TestClient) -> None:
         json={
             "period_start": "2026-09-01",
             "period_end": "2026-09-07",
-            "entries": [
-                {"work_date": "2026-09-01", "hours": "8", "project_code": "ATLAS"}
-            ],
+            "entries": [{"work_date": "2026-09-01", "hours": "8", "project_code": "ATLAS"}],
         },
     )
     assert response.status_code == 422
@@ -535,23 +520,18 @@ def test_openapi_contains_time_surface(client: TestClient) -> None:
     } <= paths
     assert specification["paths"]["/api/v1/time/healthz"]["get"]["operationId"] == "timeHealth"
     assert (
-        specification["paths"]["/api/v1/time/timesheets"]["get"]["operationId"]
-        == "listTimesheets"
+        specification["paths"]["/api/v1/time/timesheets"]["get"]["operationId"] == "listTimesheets"
     )
     assert (
         specification["paths"]["/api/v1/time/timesheets"]["post"]["operationId"]
         == "createTimesheet"
     )
     assert (
-        specification["paths"]["/api/v1/time/timesheets/{timesheet_id}"]["get"][
-            "operationId"
-        ]
+        specification["paths"]["/api/v1/time/timesheets/{timesheet_id}"]["get"]["operationId"]
         == "getTimesheet"
     )
     assert (
-        specification["paths"]["/api/v1/time/timesheets/{timesheet_id}"]["put"][
-            "operationId"
-        ]
+        specification["paths"]["/api/v1/time/timesheets/{timesheet_id}"]["put"]["operationId"]
         == "updateTimesheet"
     )
     assert (
@@ -561,9 +541,61 @@ def test_openapi_contains_time_surface(client: TestClient) -> None:
         == "submitTimesheet"
     )
     assert (
-        specification["paths"]["/api/v1/time/pto/balance"]["get"]["operationId"]
-        == "getPtoBalance"
+        specification["paths"]["/api/v1/time/pto/balance"]["get"]["operationId"] == "getPtoBalance"
     )
     schemas = specification["components"]["schemas"]
     assert schemas["TimesheetCreate"]["properties"]["entries"]["maxItems"] == 7
     assert schemas["TimesheetUpdate"]["properties"]["entries"]["maxItems"] == 7
+
+
+async def test_handle_timesheet_approved_finalizes_pending_timesheet(consumer_db: Session) -> None:
+    timesheet = Timesheet(
+        employee_id=uuid.UUID(ADA_ID),
+        period_start=date(2026, 10, 1),
+        period_end=date(2026, 10, 7),
+        status="PENDING_APPROVAL",
+    )
+    consumer_db.add(timesheet)
+    consumer_db.commit()
+
+    await handle_timesheet_approved({"data": {"timesheet_id": str(timesheet.id)}})
+
+    consumer_db.refresh(timesheet)
+    assert timesheet.status == "APPROVED"
+
+
+async def test_handle_timesheet_rejected_finalizes_pending_timesheet(consumer_db: Session) -> None:
+    timesheet = Timesheet(
+        employee_id=uuid.UUID(ADA_ID),
+        period_start=date(2026, 10, 8),
+        period_end=date(2026, 10, 14),
+        status="PENDING_APPROVAL",
+    )
+    consumer_db.add(timesheet)
+    consumer_db.commit()
+
+    await handle_timesheet_rejected({"data": {"timesheet_id": str(timesheet.id)}})
+
+    consumer_db.refresh(timesheet)
+    assert timesheet.status == "REJECTED"
+
+
+async def test_handle_timesheet_decision_is_idempotent_and_ignores_unknown_ids(
+    consumer_db: Session,
+) -> None:
+    timesheet = Timesheet(
+        employee_id=uuid.UUID(ADA_ID),
+        period_start=date(2026, 10, 15),
+        period_end=date(2026, 10, 21),
+        status="REJECTED",
+    )
+    consumer_db.add(timesheet)
+    consumer_db.commit()
+
+    # Already finalized as REJECTED: a redelivered APPROVED decision is a no-op.
+    await handle_timesheet_approved({"data": {"timesheet_id": str(timesheet.id)}})
+    consumer_db.refresh(timesheet)
+    assert timesheet.status == "REJECTED"
+
+    # Unknown timesheet id: logged and ignored, no exception raised.
+    await handle_timesheet_approved({"data": {"timesheet_id": str(uuid.uuid4())}})

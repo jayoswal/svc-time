@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
@@ -14,6 +15,18 @@ from app.main import app
 from app.seed import seed_demo_data
 
 
+@pytest.fixture(autouse=True)
+def _no_amqp_consumer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests run without a broker; stand in for consume() so the lifespan
+    task idles (like the old empty-BINDINGS behaviour) instead of retrying
+    a real AMQP connection forever."""
+
+    async def fake_consume(_: object) -> None:
+        await asyncio.Future()
+
+    monkeypatch.setattr("app.main.consume", fake_consume)
+
+
 @pytest.fixture
 def db() -> Iterator[Session]:
     engine = create_engine(
@@ -27,6 +40,19 @@ def db() -> Iterator[Session]:
         seed_demo_data(session)
         yield session
     Base.metadata.drop_all(engine)
+
+
+@pytest.fixture
+def consumer_db(db: Session, monkeypatch: pytest.MonkeyPatch) -> Session:
+    """Point the module-level SessionLocal used by consumer handlers at the
+    same in-memory test engine as the `db` fixture, since handlers open their
+    own sessions rather than using the FastAPI `get_db` dependency."""
+
+    monkeypatch.setattr(
+        "app.consumers.SessionLocal",
+        sessionmaker(bind=db.get_bind(), expire_on_commit=False),
+    )
+    return db
 
 
 @pytest.fixture

@@ -14,15 +14,11 @@ Handler = Callable[[Event], Awaitable[None]]
 Binding = tuple[str, str, list[str], Handler]
 
 
-async def publish(
-    exchange: str, event_type: str, data: Event, correlation_id: str
-) -> None:
+async def publish(exchange: str, event_type: str, data: Event, correlation_id: str) -> None:
     connection = await aio_pika.connect_robust(settings.amqp_url)
     async with connection:
         channel = await connection.channel()
-        target = await channel.declare_exchange(
-            exchange, aio_pika.ExchangeType.TOPIC, durable=True
-        )
+        target = await channel.declare_exchange(exchange, aio_pika.ExchangeType.TOPIC, durable=True)
         body = {
             "id": str(uuid.uuid4()),
             "type": event_type,
@@ -48,9 +44,7 @@ async def consume(bindings: list[Binding]) -> None:
     channel = await connection.channel()
     await channel.set_qos(prefetch_count=20)
     for exchange, queue_name, keys, handler in bindings:
-        source = await channel.declare_exchange(
-            exchange, aio_pika.ExchangeType.TOPIC, durable=True
-        )
+        source = await channel.declare_exchange(exchange, aio_pika.ExchangeType.TOPIC, durable=True)
         queue = await channel.declare_queue(queue_name, durable=True)
         for key in keys:
             await queue.bind(source, routing_key=key)

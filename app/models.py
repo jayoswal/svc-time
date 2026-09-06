@@ -45,9 +45,7 @@ class EmployeeRead(Base):
     manager_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     pto_entitlement_days: Mapped[int] = mapped_column(default=0)
     roles: Mapped[list[str]] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -72,15 +70,9 @@ class Timesheet(Base):
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(20), default=TimesheetStatus.DRAFT)
-    total_hours: Mapped[Decimal] = mapped_column(
-        Numeric(6, 2), default=Decimal("0.00")
-    )
-    overtime_hours: Mapped[Decimal] = mapped_column(
-        Numeric(6, 2), default=Decimal("0.00")
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    total_hours: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("0.00"))
+    overtime_hours: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("0.00"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -97,9 +89,7 @@ class TimeEntry(Base):
     __tablename__ = "time_entries"
     __table_args__ = (
         CheckConstraint("hours > 0 AND hours <= 24", name="ck_time_entries_hours"),
-        UniqueConstraint(
-            "timesheet_id", "work_date", name="uq_time_entries_timesheet_work_date"
-        ),
+        UniqueConstraint("timesheet_id", "work_date", name="uq_time_entries_timesheet_work_date"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

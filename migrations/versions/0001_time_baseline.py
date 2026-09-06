@@ -69,9 +69,7 @@ def upgrade() -> None:
         sa.CheckConstraint("total_hours >= 0", name="ck_timesheets_total_hours"),
         sa.CheckConstraint("overtime_hours >= 0", name="ck_timesheets_overtime_hours"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "employee_id", "period_start", name="uq_timesheets_employee_period"
-        ),
+        sa.UniqueConstraint("employee_id", "period_start", name="uq_timesheets_employee_period"),
     )
     op.create_index("ix_timesheets_employee_id", "timesheets", ["employee_id"])
     op.create_index(

@@ -50,9 +50,7 @@ class TimesheetCreate(BaseModel):
 
     @field_validator("entries")
     @classmethod
-    def validate_unique_entry_dates(
-        cls, entries: list[TimeEntryInput]
-    ) -> list[TimeEntryInput]:
+    def validate_unique_entry_dates(cls, entries: list[TimeEntryInput]) -> list[TimeEntryInput]:
         dates = [entry.work_date for entry in entries]
         if len(dates) != len(set(dates)):
             raise ValueError("entries must contain at most one entry per work_date")
@@ -72,9 +70,7 @@ class TimesheetUpdate(BaseModel):
 
     @field_validator("entries")
     @classmethod
-    def validate_unique_entry_dates(
-        cls, entries: list[TimeEntryInput]
-    ) -> list[TimeEntryInput]:
+    def validate_unique_entry_dates(cls, entries: list[TimeEntryInput]) -> list[TimeEntryInput]:
         dates = [entry.work_date for entry in entries]
         if len(dates) != len(set(dates)):
             raise ValueError("entries must contain at most one entry per work_date")
